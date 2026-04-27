@@ -21,5 +21,15 @@ The macro was briefly tested on one run, emission points 0.1 and 0.9. Indeed, on
 ![Single Photon Resolution and pion/kaon likelihood ratio for emission point 0.1][image_SPRL_01]
 ![Single Photon Resolution and pion/kaon likelihood ratio for emission point 0.9][image_SPRL_09]
 
+## Notes / to-do
+- Do I need to consider that cathodes 3, 5, 10, 12 have different refractive index than the other? 
+- Should I use ratio of like lihoods or difference of logs?
+- Save histograms as root file, append when processing other runs
+- Process multiple runs at once
+- Optimization, multithreading? Probably not worth it.
+- Does the binning align with the physical layout? 
+- There are quite few tracks, is it possible I filtered out too many?
+- Set identical color scheme and scale for all PathFracs.
+
 [image_SPRL_01]: img/SPRL_run_297678_pathfrac01.png "Single Photon Resolution & pi/k Likelihood, ParticlePathFr = 0.1"
 [image_SPRL_09]: img/SPRL_run_297678_pathfrac09.png "Single Photon Resolution & pi/k Likelihood, ParticlePathFr = 0.9"
