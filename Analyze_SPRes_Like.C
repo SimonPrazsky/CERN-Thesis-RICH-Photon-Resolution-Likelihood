@@ -3,8 +3,9 @@
 #include <TH1F.h>
 #include <TError.h>
 #include <cstdio>
+#include <stdatomic.h>
 
-void Analyze_SPRes_Like(const char* filename = "histo00.root", float mom_low = 55.0, float mom_high = 65.0) {
+void hist(const char* filename = "histo00.root", float mom_low = 55.0, float mom_high = 65.0) {
     TFile* f = TFile::Open(filename, "READ");
     if (!f || f->IsZombie()) {
         Error("rich_cmom", "Cannot open file: %s", filename);
@@ -111,10 +112,6 @@ void Analyze_SPRes_Like(const char* filename = "histo00.root", float mom_low = 5
     RICH->SetBranchAddress("likeEl", likeEl);
     RICH->SetBranchAddress("likeMu", likeMu);
 
-    // create canvas and divide it (to show histograms next to each other)
-    TCanvas* c1 = new TCanvas("c1", "c1", 1200, 600);
-    c1->Divide(2, 1);
-
     // create histograms for Single Photon Resolution map
     TH2D* SPR_sigma = new TH2D("SPR_sigma", "h_sigma;std dev;Entries", 100, -1500, 1500, 100, -1500, 1500);
     TH2I* SPR_n = new TH2I("SPR_n", "h_nphot;nPhotons;Entries", 100, -1500, 1500, 100, -1500, 1500);
@@ -122,34 +119,76 @@ void Analyze_SPRes_Like(const char* filename = "histo00.root", float mom_low = 5
     TH2D* L_pi_ka = new TH2D("L_pi_ka", "h_pi_ka;likelihood ratio;Entries", 100, -1500, 1500, 100, -1500, 1500);
     TH2I* L_n = new TH2I("L_n", "h_nphot;nPhotons;Entries", 100, -1500, 1500, 100, -1500, 1500);
 
+    TH1I* hdebug = new TH1I("hdebug", "Event cut debug;cut_no;Entries", 6, 0, 6);
+    TH1I* hdebug_ntracks = new TH1I("hdebug_ntracks", "Number of tracks/event;Number of tracks in event;Entries", 20, 0, 20);
+    long totalTracks = 0;
+    long selectedTracks = 0;
+    long totalCutTracks = 0;
+    // 0 - zero tracks -- half of all       OK expected
+    // 1 - noisy events -- cuts above 300 threshold
+    // 2 - too few photons -- ~5%           ?
+    // 3 - momentum cut -- most tracks      OK expected
+    // 4 - negative photon indeces ~0.5%    need to investigate -- ISSUE FIXED
+    // 5 - sigma = 0.0
+
     int nEntries = RICH->GetEntries();
     for (int i = 0; i < nEntries; ++i) {
         if (i % 20000 == 0) printf("Entry %d/%d\n", i, nEntries);
         RICH->GetEntry(i);
+        hdebug_ntracks->Fill(nTracks);
         //printf("\n-------------------------\nEntry %d:\tnTracks = %d\tnRings = %d\n", i, nTracks, nRings);
-        if (nTracks == 0) continue;
+
+        // Cut events with zero tracks
+        if (nTracks == 0) { //hdebug->Fill(0);
+            continue;
+        }
+
+        totalTracks += nTracks;
         int stdev_skipped = 0;  // counter for tracks that were skipped due to std dev = 0
         int negative_indeces_skipped = 0;  // sanity check - counter for tracks that were skipped due to negative indeces
-        int photon_start_id[350] = {-999};
-        int photon_end_id[350] = {-999};
+
+        // Photon indices
+        int photon_start_id[350];
+        int photon_end_id[350];
+        for (int ii = 0; ii < 350; ++ii) {
+            photon_start_id[ii] = -999;
+            photon_end_id[ii] = -999;
+        }
+        int last_valid_j = -1;
+
         for (auto j = 0; j < nTracks; ++j) {
             // Filter out too noisy events
-            if (nPhotons > 350) continue;
+            if (nPhotons > 300) {   // Doesn't cut anything for treshold >=300 -- number of photons per track is probably limited
+                hdebug->Fill(1);
+                continue;
+            }
+            if (nPhoRing[j] < 3) {  // Filtering out rings with less than 3 photons because they yield sigma ~= 0.8 mrad
+                //hdebug->Fill(2);
+                continue;     // should remove tracks that return sigma = 0.0 - CHECK IT
+            }
 
             // --- Momentum cut ---
             auto momentum = fabs(cmom[j]);
-            if (momentum < mom_low || momentum > mom_high) continue;
+            if (momentum < mom_low || momentum > mom_high) {
+                //hdebug->Fill(3);
+                continue;
+            }
 
             // --- Single Photon Resolution map ---
-            if (j == 0) {
+
+            if (last_valid_j == -1) {
                 photon_start_id[j] = 0;
-                photon_end_id[j] = photon_start_id[j] + nPhoRing[j] - 1;
+            } else {
+                photon_start_id[j] = photon_end_id[last_valid_j] + 1;
             }
-            else {
-                photon_start_id[j] = photon_end_id[j-1] + 1 ;
-                photon_end_id[j] = photon_start_id[j] + nPhoRing[j] - 1;
+            photon_end_id[j] = photon_start_id[j] + nPhoRing[j] - 1;
+
+            // Negative indeces check
+            if (photon_start_id[j] < 0 || photon_end_id[j] < 0) {
+                hdebug->Fill(4);
+                printf("Event = %d\t Track j = %d\t Photon index range: %d-%d\n", i, j, photon_start_id[j], photon_end_id[j]);
+                continue;
             }
-            if (photon_start_id[j] < 0 || photon_end_id[j] < 0) { negative_indeces_skipped += 1; continue; }
             //printf("Photon index range: %d-%d\n", photon_start_id[j], photon_end_id[j]);
             auto histo_theta_residual = new TH1F("histo_theta_residual", "histo_theta_residual;theta residual;Entries", 100, -10, 10);
             for (auto k = photon_start_id[j]; k <= photon_end_id[j]; ++k) {
@@ -160,8 +199,8 @@ void Analyze_SPRes_Like(const char* filename = "histo00.root", float mom_low = 5
             auto std_dev = histo_theta_residual->GetStdDev();
             //histo_theta_residual->Draw();
             delete histo_theta_residual;    // must be commented out if one wants to see the histogram
-            if (std_dev == 0.0) { stdev_skipped += 1; continue; }
-            //printf("std_dev = %f\tnPhoRing = %d\n", std_dev, nPhoRing[j]);
+            if (std_dev == 0.0) { hdebug->Fill(5); continue; }
+            printf("std_dev = %f\tnPhoRing = %d\n", std_dev, nPhoRing[j]);
             for (auto k = photon_start_id[j]; k <= photon_end_id[j]; ++k) {
                 SPR_sigma->Fill(xc[k], yc[k], std_dev);
                 SPR_n->Fill(xc[k], yc[k]);
@@ -171,20 +210,44 @@ void Analyze_SPRes_Like(const char* filename = "histo00.root", float mom_low = 5
             auto pi_ka_ratio = likePi[j] / likeKa[j];
             L_pi_ka->Fill(xPaDe[j], yPaDe[j], pi_ka_ratio);
             L_n->Fill(xPaDe[j], yPaDe[j]);
+
+            selectedTracks++;
         }
         //printf("Std dev skipped: \t%d\nNegative indeces skipped: \t%d\nnPhotons = %d\n-------------------------\n", stdev_skipped, negative_indeces_skipped, nPhotons);
     }
+    totalCutTracks = totalTracks - hdebug->Integral();
+
+    // get mean value in z-axis for entire detector
+    double SPR_sigma_mean = SPR_sigma->Integral()/SPR_n->Integral();
+    //printf("SPR sigma mean: %f\n", SPR_sigma_mean)
+    TString title = "SPR sigma mean: " + TString::Format("%f", SPR_sigma_mean);
+    SPR_sigma->SetTitle(title);
 
     // Average out histograms
     SPR_sigma->Divide(SPR_n);
     L_pi_ka->Divide(L_n);
 
     // Draw histograms
+    // create canvas and divide it (to show histograms next to each other)
+    TCanvas* c1 = new TCanvas("c1", "c1", 1200, 600);
+    c1->Divide(2, 1);
     c1->cd(1);
     SPR_sigma->Draw("colz");
     c1->cd(2);
     L_pi_ka->Draw("colz");
     c1->Update();
+
+    TCanvas* c2 = new TCanvas("c2", "c2", 1200, 600);
+    //gStyle->SetOptLogy();
+    c2->Divide(2, 1);
+    c2->cd(1);
+    TString title2 = "Selected tracks: " + std::to_string(selectedTracks) + " / " + std::to_string(totalTracks) + " = " + std::to_string(static_cast<double>(selectedTracks) / totalTracks) + "\tnEntries: " + std::to_string(nEntries);
+    hdebug->SetTitle(title2);
+    hdebug->Draw();
+    c2->cd(2);
+    hdebug_ntracks->Draw();
+    //c2->Update();
+
 
     // Build output file name
     TString outfilename = TString("SPRL_") + gSystem->BaseName(filename);
@@ -192,8 +255,9 @@ void Analyze_SPRes_Like(const char* filename = "histo00.root", float mom_low = 5
     // Save canvas to file
     c1->SaveAs(outfilename + ".png");
     // Save histograms to file
-    //TFile* outfile = new TFile(outfilename + ".root", "RECREATE");
-    //SPR_sigma->Write();
-    //L_pi_ka->Write();
-    //outfile->Close();
+    TFile* outfile = new TFile(outfilename + ".root", "RECREATE");
+    SPR_sigma->Write();
+    L_pi_ka->Write();
+    outfile->Close();
 }
+
