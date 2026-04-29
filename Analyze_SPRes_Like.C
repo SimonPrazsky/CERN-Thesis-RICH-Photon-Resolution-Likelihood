@@ -3,7 +3,6 @@
 #include <TH1F.h>
 #include <TError.h>
 #include <cstdio>
-#include <stdatomic.h>
 
 void hist(const char* filename = "histo00.root", float mom_low = 55.0, float mom_high = 65.0) {
     TFile* f = TFile::Open(filename, "READ");
@@ -128,7 +127,6 @@ void hist(const char* filename = "histo00.root", float mom_low = 55.0, float mom
     // 1 - noisy events -- cuts above 300 threshold
     // 2 - too few photons -- ~5%           ?
     // 3 - momentum cut -- most tracks      OK expected
-    // 4 - negative photon indeces ~0.5%    need to investigate -- ISSUE FIXED
     // 5 - sigma = 0.0
 
     int nEntries = RICH->GetEntries();
@@ -144,8 +142,6 @@ void hist(const char* filename = "histo00.root", float mom_low = 55.0, float mom
         }
 
         totalTracks += nTracks;
-        int stdev_skipped = 0;  // counter for tracks that were skipped due to std dev = 0
-        int negative_indeces_skipped = 0;  // sanity check - counter for tracks that were skipped due to negative indeces
 
         // Photon indices
         int photon_start_id[350];
@@ -157,25 +153,25 @@ void hist(const char* filename = "histo00.root", float mom_low = 55.0, float mom
         int last_valid_j = -1;
 
         for (auto j = 0; j < nTracks; ++j) {
-            // Filter out too noisy events
-            if (nPhotons > 300) {   // Doesn't cut anything for treshold >=300 -- number of photons per track is probably limited
-                hdebug->Fill(1);
-                continue;
-            }
-            if (nPhoRing[j] < 3) {  // Filtering out rings with less than 3 photons because they yield sigma ~= 0.8 mrad
-                //hdebug->Fill(2);
-                continue;     // should remove tracks that return sigma = 0.0 - CHECK IT
-            }
-
             // --- Momentum cut ---
             auto momentum = fabs(cmom[j]);
             if (momentum < mom_low || momentum > mom_high) {
-                //hdebug->Fill(3);
+                // hdebug->Fill(3);
                 continue;
             }
 
-            // --- Single Photon Resolution map ---
+            // Filter out too noisy events
+            // if (nPhotons > 300) {   // Doesn't cut anything for treshold >=300 -- number of photons per track is probably limited
+            //     hdebug->Fill(1);
+            //     continue;
+            // }
 
+            if (nPhoRing[j] < 3) {  // Filtering out rings with less than 3 photons because they yield sigma ~= 0.8 mrad
+                hdebug->Fill(2);
+                continue;     // removes ~70% of tracks that return sigma = 0.0
+            }
+
+            // --- Single Photon Resolution map ---
             if (last_valid_j == -1) {
                 photon_start_id[j] = 0;
             } else {
@@ -183,12 +179,6 @@ void hist(const char* filename = "histo00.root", float mom_low = 55.0, float mom
             }
             photon_end_id[j] = photon_start_id[j] + nPhoRing[j] - 1;
 
-            // Negative indeces check
-            if (photon_start_id[j] < 0 || photon_end_id[j] < 0) {
-                hdebug->Fill(4);
-                printf("Event = %d\t Track j = %d\t Photon index range: %d-%d\n", i, j, photon_start_id[j], photon_end_id[j]);
-                continue;
-            }
             //printf("Photon index range: %d-%d\n", photon_start_id[j], photon_end_id[j]);
             auto histo_theta_residual = new TH1F("histo_theta_residual", "histo_theta_residual;theta residual;Entries", 100, -10, 10);
             for (auto k = photon_start_id[j]; k <= photon_end_id[j]; ++k) {
@@ -230,10 +220,15 @@ void hist(const char* filename = "histo00.root", float mom_low = 55.0, float mom
     // Draw histograms
     // create canvas and divide it (to show histograms next to each other)
     TCanvas* c1 = new TCanvas("c1", "c1", 1200, 600);
+    gStyle->SetPalette(kDeepSea); //kInvertedDarkBodyRadiator, kDeepSea, kBird, kGreyScale
     c1->Divide(2, 1);
     c1->cd(1);
+    SPR_sigma->SetMinimum(0.0);
+    SPR_sigma->SetMaximum(3.5);
     SPR_sigma->Draw("colz");
     c1->cd(2);
+    L_pi_ka->SetMinimum(0.0);
+    L_pi_ka->SetMaximum(1.4);
     L_pi_ka->Draw("colz");
     c1->Update();
 
@@ -254,10 +249,10 @@ void hist(const char* filename = "histo00.root", float mom_low = 55.0, float mom
     outfilename.ReplaceAll(".root", "");
     // Save canvas to file
     c1->SaveAs(outfilename + ".png");
+    c2->SaveAs(outfilename + "_debug.png");
     // Save histograms to file
     TFile* outfile = new TFile(outfilename + ".root", "RECREATE");
     SPR_sigma->Write();
     L_pi_ka->Write();
     outfile->Close();
 }
-
